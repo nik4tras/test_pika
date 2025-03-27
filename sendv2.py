@@ -9,7 +9,7 @@ channel.queue_declare(queue='my_queue', durable=True)
 
 
 
-for i in range(10):
+for i in range(5000000):
     msg = {
 	    "msg_nr": i,
 	    "msg_content": "Einfach nur ein Text",
@@ -17,6 +17,7 @@ for i in range(10):
     channel.basic_publish(exchange='',
                         routing_key='my_queue',
                         body=json.dumps(msg, ensure_ascii=False,indent=2))
-    print(f" [x] Sent #{i}")
+    #print(f" [x] Sent #{i}")
 
 connection.close()
+print(" [x] Sent 5000000 messages")

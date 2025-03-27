@@ -1,10 +1,10 @@
-import pika
+import amqpstorm
 import oracledb
 import json
 import logging
 from datetime import datetime
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from queue import Queue
 import time
 
 # Configure logging
@@ -19,7 +19,7 @@ rabbitmq_config = {
     'username': 'guest',  # Replace with your username
     'password': 'guest',  # Replace with your password
     'queue_name': 'my_queue',  # Replace with your queue name
-    'prefetch_count': 100  # Increased prefetch count for better throughput
+    'prefetch_count': 2000  # Increased prefetch count for better throughput
 }
 
 # Oracle DB connection parameters
@@ -28,7 +28,7 @@ oracle_config = {
     'password': 'password',   # Replace with your Oracle password
     'dsn': 'localhost:1521/FREEPDB1',  # Replace with your Oracle connection string
     'table_name': 'data_landing', # Replace with your table name
-    'batch_size': 50,         # Number of records to insert in a single batch
+    'batch_size': 1000,         # Number of records to insert in a single batch
     'pool_min': 2,            # Minimum number of connections in the pool
     'pool_max': 10,           # Maximum number of connections in the pool
     'pool_increment': 1       # Increment by which the pool grows
@@ -38,24 +38,19 @@ oracle_config = {
 message_buffer = []
 buffer_lock = threading.Lock()
 oracle_pool = None
+delivery_tags = Queue()  # Thread-safe queue for delivery tags
+
 
 def create_oracle_pool():
     """Create and return an Oracle connection pool"""
     try:
-        # Initialize oracle client
-        #print("Init ORA")
-        #oracledb.init_oracle_client()
-        
-        # Create the connection pool
-        print("Create ORA pool")
         pool = oracledb.create_pool(
             user=oracle_config['user'],
             password=oracle_config['password'],
             dsn=oracle_config['dsn'],
             min=oracle_config['pool_min'],
             max=oracle_config['pool_max'],
-            increment=oracle_config['pool_increment'],
-            #threaded=True
+            increment=oracle_config['pool_increment']
         )
         logger.info(f"Oracle connection pool created with {oracle_config['pool_min']} to {oracle_config['pool_max']} connections")
         return pool
@@ -63,89 +58,56 @@ def create_oracle_pool():
         logger.error(f"Failed to create Oracle connection pool: {e}")
         raise
 
+
 def connect_to_rabbitmq():
     """Establish connection to RabbitMQ and return channel"""
     try:
-        credentials = pika.PlainCredentials(
-            rabbitmq_config['username'], 
-            rabbitmq_config['password']
-        )
-        
-        # Use connection parameters with heartbeat and blocked connection timeout
-        connection_params = pika.ConnectionParameters(
-            host=rabbitmq_config['host'],
-            port=rabbitmq_config['port'],
+        connection: amqpstorm.Connection = amqpstorm.Connection(
+            hostname=rabbitmq_config['host'],
+            username=rabbitmq_config['username'],
+            password=rabbitmq_config['password'],
             virtual_host=rabbitmq_config['virtual_host'],
-            credentials=credentials,
-            heartbeat=60,  # Heartbeat interval in seconds
-            blocked_connection_timeout=300  # 5 minutes timeout
+            port=rabbitmq_config['port']
         )
-        
-        connection = pika.BlockingConnection(connection_params)
         channel = connection.channel()
-        
-        # Ensure the queue exists and is durable
-        channel.queue_declare(queue=rabbitmq_config['queue_name'], durable=True)
-        
-        # Set higher prefetch count for better throughput
-        channel.basic_qos(prefetch_count=rabbitmq_config['prefetch_count'])
-        
+        channel.basic.qos(prefetch_count=rabbitmq_config['prefetch_count'])
+        print("Setting Queue name")
+        #channel.queue.declare(queue=rabbitmq_config['queue_name'], durable=True)
         logger.info(f"Successfully connected to RabbitMQ with prefetch count {rabbitmq_config['prefetch_count']}")
         return connection, channel
     except Exception as e:
         logger.error(f"Failed to connect to RabbitMQ: {e}")
         raise
 
+
 def batch_insert_into_oracle():
     """Insert batched messages into Oracle table"""
     global message_buffer
-    
+
     while True:
-        # Sleep if buffer is empty
         if not message_buffer:
             time.sleep(0.1)
             continue
-            
-        # Get a batch of messages from the buffer
+
         with buffer_lock:
-            if message_buffer:
-                # Take up to batch_size messages
-                current_batch = message_buffer[:oracle_config['batch_size']]
-                # Remove these messages from the buffer
-                message_buffer = message_buffer[oracle_config['batch_size']:]
-            else:
-                continue
-        
+            current_batch = message_buffer[:oracle_config['batch_size']]
+            message_buffer = message_buffer[oracle_config['batch_size']:]
+
         if not current_batch:
             continue
-            
-        # Get a connection from the pool
+
         connection = oracle_pool.acquire()
         cursor = connection.cursor()
-        
+
         try:
-            # Prepare for bulk insert
-            # Assume all messages have the same structure
             first_msg = current_batch[0]
             columns = ', '.join(first_msg.keys())
-            
-            # Create bind variable names (:1, :2, etc.)
-            bind_names = ', '.join([':' + str(i+1) for i in range(len(first_msg))])
-            
-            # Create the INSERT statement
+            bind_names = ', '.join([':' + str(i + 1) for i in range(len(first_msg))])
             insert_query = f"INSERT INTO {oracle_config['table_name']} ({columns}) VALUES ({bind_names})"
-            
-            # Prepare data for executemany
-            batch_data = []
-            for msg in current_batch:
-                batch_data.append(list(msg.values()))
-            
-            # Execute the batch insert
+            batch_data = [list(msg.values()) for msg in current_batch]
             cursor.executemany(insert_query, batch_data)
             connection.commit()
-            
-            logger.info(f"Successfully inserted batch of {len(current_batch)} records")
-            
+            #logger.info(f"Successfully inserted batch of {len(current_batch)} records")
         except Exception as e:
             logger.error(f"Failed to insert batch: {e}")
             connection.rollback()
@@ -153,119 +115,87 @@ def batch_insert_into_oracle():
             cursor.close()
             oracle_pool.release(connection)
 
-def callback(ch, method, properties, body, delivery_tags):
+
+def callback(rmqmsg: amqpstorm.Message):
     """Callback function for RabbitMQ consumer"""
     global message_buffer
-    
+
     try:
         # Decode and parse the message
-        message = json.loads(body.decode('utf-8'))
-        
+        # message = json.loads(rmqmsg.body.decode('utf-8'))
+        message = rmqmsg.json()
+
         # Add timestamp
         message['processed_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        
+
         # Add to buffer
         with buffer_lock:
             message_buffer.append(message)
             # Store the delivery tag for acknowledgment
-            delivery_tags.append(method.delivery_tag)
-            
-            # If buffer reaches batch size, signal for processing
-            buffer_size = len(message_buffer)
-            
-        logger.debug(f"Added message to buffer. Current buffer size: {buffer_size}")
-        
+            delivery_tags.put(rmqmsg.delivery_tag)
+
+        logger.debug(f"Added message to buffer. Current buffer size: {len(message_buffer)}")
+
     except json.JSONDecodeError:
         logger.error("Invalid JSON message format")
-        # Acknowledge invalid messages to remove them from queue
-        ch.basic_ack(delivery_tag=method.delivery_tag)
+        # Acknowledge invalid messages to remove them from the queue
+        rmqmsg.ack()
     except Exception as e:
         logger.error(f"Error processing message: {e}")
         # Negative acknowledge with requeue
-        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+        rmqmsg.nack(requeue=True)
 
-def acknowledge_messages(channel, delivery_tags, batch_size):
+
+def acknowledge_messages(channel):
     """Acknowledge messages in batches"""
     while True:
-        # Sleep if no tags to acknowledge
-        if not delivery_tags:
+        if delivery_tags.empty():
             time.sleep(0.1)
             continue
-            
-        # Take a batch of tags to acknowledge
+
         current_tags = []
-        while delivery_tags and len(current_tags) < batch_size:
-            try:
-                tag = delivery_tags.pop(0)
-                current_tags.append(tag)
-            except IndexError:
-                break
-                
+        while not delivery_tags.empty():
+            current_tags.append(delivery_tags.get())
+
         if not current_tags:
             continue
-            
+
         try:
-            # Acknowledge all messages up to the last tag
-            last_tag = current_tags[-1]
-            channel.basic_ack(delivery_tag=last_tag, multiple=True)
-            logger.debug(f"Acknowledged {len(current_tags)} messages up to tag {last_tag}")
+            channel.basic.ack(delivery_tag=current_tags[-1], multiple=True)
+            logger.debug(f"Acknowledged {len(current_tags)} messages")
         except Exception as e:
             logger.error(f"Failed to acknowledge messages: {e}")
-            # Put the tags back if acknowledgment fails
-            delivery_tags.extend(current_tags)
+            for tag in current_tags:
+                delivery_tags.put(tag)
+
 
 def main():
     """Main function to run the consumer"""
     global oracle_pool
-    
+
     try:
-        # Create Oracle connection pool
-        print("Connect to oracle")
         oracle_pool = create_oracle_pool()
-        
-        # Connect to RabbitMQ
-        print("Connect to RabbitMQ")
         rabbitmq_conn, channel = connect_to_rabbitmq()
-        
-        # Shared list for delivery tags
-        delivery_tags = []
-        
-        # Start batch insert thread
-        insert_thread = threading.Thread(target=batch_insert_into_oracle, daemon=True)
-        insert_thread.start()
-        
-        # Start acknowledge thread
-        ack_thread = threading.Thread(
-            target=acknowledge_messages, 
-            args=(channel, delivery_tags, oracle_config['batch_size']),
-            daemon=True
-        )
-        ack_thread.start()
-        
-        # Create a partial function with the delivery tags list
-        from functools import partial
-        on_message_callback = partial(callback, delivery_tags=delivery_tags)
-        
-        # Start consuming
-        channel.basic_consume(
-            queue=rabbitmq_config['queue_name'],
-            on_message_callback=on_message_callback,
-            auto_ack=False
-        )
-        
+
+        print("Start Batch inserts Thread")
+        threading.Thread(target=batch_insert_into_oracle, daemon=True).start()
+        print("Start Acknowledge Thread")
+        threading.Thread(target=acknowledge_messages, args=(channel,), daemon=True).start()
+
+        print("Start RabbitMQ Consumer")
+        channel.basic.consume(queue=rabbitmq_config['queue_name'], callback=callback)
         logger.info("Starting to consume messages...")
         channel.start_consuming()
-        
     except KeyboardInterrupt:
         logger.info("Consumer stopped by user")
     except Exception as e:
         logger.error(f"Unexpected error: {e}")
     finally:
-        # Close connections
-        if 'rabbitmq_conn' in locals() and rabbitmq_conn.is_open:
+        if 'rabbitmq_conn' in locals():
             rabbitmq_conn.close()
         if oracle_pool:
             oracle_pool.close()
-            
+
+
 if __name__ == "__main__":
     main()
