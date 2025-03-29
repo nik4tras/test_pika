@@ -9,7 +9,7 @@ channel.queue_declare(queue='my_queue', durable=True)
 
 
 
-for i in range(5000000):
+for i in range(1000000):
     msg = {
 	    "msg_nr": i,
 	    "msg_content": "Einfach nur ein Text",
@@ -20,4 +20,4 @@ for i in range(5000000):
     #print(f" [x] Sent #{i}")
 
 connection.close()
-print(" [x] Sent 5000000 messages")
+print(" [x] Sent all messages")
