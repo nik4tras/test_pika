@@ -9,7 +9,7 @@ channel.queue_declare(queue='my_queue', durable=True)
 
 
 
-for i in range(1000000):
+for i in range(500000):
     msg = {
 	    "msg_nr": i,
 	    "msg_content": "Einfach nur ein Text",

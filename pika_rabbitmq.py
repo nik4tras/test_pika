@@ -11,6 +11,8 @@ import time
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+STATE = {}
+
 # RabbitMQ connection parameters
 rabbitmq_config = {
     'host': 'localhost',  # Replace with your RabbitMQ host
@@ -67,7 +69,7 @@ def connect_to_rabbitmq():
             virtual_host=rabbitmq_config['virtual_host'],
             port=rabbitmq_config['port']
         )
-        channel = connection.channel()
+        channel = connection.channel(rpc_timeout=10)
         channel.basic.qos(prefetch_count=rabbitmq_config['prefetch_count'])
         #channel.queue.declare(rabbitmq_config['queue_name'], durable=True)
         logger.info(f"Successfully connected to RabbitMQ with prefetch count {rabbitmq_config['prefetch_count']}")
@@ -77,8 +79,10 @@ def connect_to_rabbitmq():
         raise
 
 
-def batch_insert_into_oracle(channel):
+def batch_insert_into_oracle(channel,tnum):
     """Insert batched messages into Oracle table and acknowledge them"""
+    global STATE
+    STATE[tnum] = True
     while True:
         try:
             # Get a batch of messages and delivery tags from the queue
@@ -93,7 +97,7 @@ def batch_insert_into_oracle(channel):
                 current_tags.append(delivery_tag)
 
             if not current_batch:
-                time.sleep(0.1)
+                time.sleep(0.5)
                 continue
 
             # Acquire a connection from the Oracle pool
@@ -109,14 +113,16 @@ def batch_insert_into_oracle(channel):
                 batch_data = [list(msg.values()) for msg in current_batch]
                 cursor.executemany(insert_query, batch_data)
                 connection.commit()
-                logger.info(f"Successfully inserted batch of {len(current_batch)} records")
+                logger.info(f"[{tnum}] Successfully inserted batch of {len(current_batch)} records")
 
                 # Acknowledge messages after successful insertion
                 if current_tags:
-                    channel.basic.ack(delivery_tag=current_tags[-1], multiple=True)
-                    logger.debug(f"Acknowledged {len(current_tags)} messages")
+                    #channel.basic.ack(delivery_tag=current_tags[-1], multiple=True)
+                    #logger.debug(f"[{tnum}] Acknowledged {len(current_tags)} messages")
+                    for tag in current_tags:
+                        channel.basic.ack(delivery_tag=tag)
             except Exception as e:
-                logger.error(f"Failed to insert batch: {e}")
+                logger.error(f"[{tnum}] Failed to insert batch: {e}")
                 connection.rollback()
                 # Requeue messages in case of failure
                 for msg, tag in zip(current_batch, current_tags):
@@ -125,7 +131,7 @@ def batch_insert_into_oracle(channel):
                 cursor.close()
                 oracle_pool.release(connection)
         except Exception as e:
-            logger.error(f"Unexpected error in batch_insert_into_oracle: {e}")
+            logger.error(f"[{tnum}] Unexpected error in batch_insert_into_oracle: {e}")
 
 
 def callback(message):
@@ -155,8 +161,8 @@ def main():
 
         # Start multiple threads for batch insertion
         num_threads = 4  # Number of threads for batch insertion
-        for _ in range(num_threads):
-            threading.Thread(target=batch_insert_into_oracle, args=(channel,), daemon=True).start()
+        for i in range(num_threads):
+            threading.Thread(target=batch_insert_into_oracle, args=(channel,i,), daemon=True).start()
 
         # Start consuming messages
         channel.basic.consume(queue=rabbitmq_config['queue_name'], callback=callback)
