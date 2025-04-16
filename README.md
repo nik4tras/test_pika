@@ -41,7 +41,7 @@ sudo systemctl enable docker.service
 sudo systemctl enable containerd.service
 ```
 
-Setup custom docker network bridge:
+Setup custom docker network bridge
 
 ```bash
 docker network create --driver bridge pika_test
@@ -65,4 +65,26 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
+## OracleDB
 
+1. Start OracleDB container: `./start_oracle.sh`
+2. Connect to the Database as `system` using Dbeaver, VS Code or something else
+    - Username: `system`
+    - Password: `p123`
+    - Host: `localhost`
+    - Port: `1521`
+    - Service Name: `FREEPDB1`
+3. Create a new user and grant privileges by running [00_setup.sql](./oradb/00_setup.sql)
+4. Connect as `test` and run [01_table_selects.sql](./oradb/01_table_selects.sql) to create the table and have some SQL stmts to test
+
+## Container
+
+### Building
+
+For the producer, just run the script `./build_producer.sh`.
+
+## Running
+
+1. Start Database: `./start_oracledb.sh`
+2. Start RabbitMQ: `./start_rabbitmq.sh`
+3. Start the producer: `./start_producer.sh`
