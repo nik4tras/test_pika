@@ -83,8 +83,17 @@ pip install -r requirements.txt
 
 For the producer, just run the script `./build_producer.sh`.
 
+RabbitMQ and Oracle are used from the official Docker images.
+
 ## Running
 
 1. Start Database: `./start_oracledb.sh`
 2. Start RabbitMQ: `./start_rabbitmq.sh`
 3. Start the producer: `./start_producer.sh`
+
+To stop, just write
+
+- for Oracle `docker stop oradb`
+- for RabbitMQ `docker stop rabbitmq`
+
+The producer stops when he has send all messages.
