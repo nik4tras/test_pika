@@ -26,8 +26,8 @@ rabbitmq_config = {
 
 # Oracle DB connection parameters
 oracle_config = {
-    'user': 'niklas',       # Replace with your Oracle username
-    'password': 'password',   # Replace with your Oracle password
+    'user': 'test',       # Replace with your Oracle username
+    'password': 'p123',   # Replace with your Oracle password
     'dsn': 'localhost:1521/FREEPDB1',  # Replace with your Oracle connection string
     'table_name': 'data_landing', # Replace with your table name
     'batch_size': 1000,         # Number of records to insert in a single batch

@@ -1,0 +1,68 @@
+# Rabbitmq Pika to Oracle with Docker
+
+## Preparation
+
+### Docker
+
+see [official documentation](https://docs.docker.com/engine/install/ubuntu/) and [post install documentation](https://docs.docker.com/engine/install/linux-postinstall/).
+
+```bash
+# uninstall all conflicting packages
+for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do sudo apt-get remove $pkg; done
+
+# setting up the apt repository
+
+# Add Docker's official GPG key:
+sudo apt-get update
+sudo apt-get install ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+# Add the repository to Apt sources:
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+  $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt-get update
+
+# install software
+sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+# post install
+
+sudo groupadd docker
+sudo usermod -aG docker $USER
+
+# logout and log back in to activate group
+
+# activate docker with systemd
+sudo systemctl enable docker.service
+sudo systemctl enable containerd.service
+```
+
+Setup custom docker network bridge:
+
+```bash
+docker network create --driver bridge pika_test
+```
+
+### Python
+
+Install Python packages
+
+```bash
+sudo apt update
+sudo apt install -y python3 python3-pip python3-venv python3-dev python3-setuptools python3-wheel python-is-python3
+```
+
+Create venv and install python pip packages
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+
