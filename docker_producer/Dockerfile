@@ -6,13 +6,13 @@ RUN pip install --upgrade pip
 
 RUN pip install --no-cache-dir pika
 
-COPY sendv2.py /tmp/sendv2.py
+COPY send.py /app/send.py
 
-RUN chmod +x /tmp/sendv2.py
+RUN chmod +x /app/send.py
 
 ENV RABBIT_HOST=rabbitmq
 ENV RABBIT_PORT=5672
 
-WORKDIR /tmp
+WORKDIR /app
 
-CMD ["python", "sendv2.py"]
+CMD ["python", "send.py"]

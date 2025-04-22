@@ -1,9 +1,11 @@
+drop table test.data_landing;
+
 CREATE TABLE test.data_landing
 (
 	id integer GENERATED ALWAYS AS IDENTITY
 ,	msg_nr integer
 ,	msg_content varchar2(4000)
-,	processed_at varchar(32)
+,	processed_at timestamp(6)
 );
 
 DROP TABLE test.DATA_LANDING ;
